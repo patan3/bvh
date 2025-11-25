@@ -1,6 +1,10 @@
 #include "precomp.h"
 #include "faster.h"
 
+// Global counters
+unsigned int global_traversal_steps = 0;
+unsigned int global_intersect_tests = 0;
+
 // THIS SOURCE FILE:
 // Code for the article "How to Build a BVH", part 2: faster rays.
 // This version improves ray traversal speed using ordered traversal
@@ -103,10 +107,19 @@ void IntersectBVH( Ray& ray )
 	uint stackPtr = 0;
 	while (1)
 	{
+		// TRAVERSAL STEPS
+		// Every time the loop runs, we are visiting a new Node (a new Box).
+		global_traversal_steps++;
 		if (node->isLeaf())
 		{
-			for (uint i = 0; i < node->triCount; i++)
-				IntersectTri( ray, tri[triIdx[node->leftFirst + i]] );
+			// If leaf node, we check the triangles inside it.
+			for (uint i = 0; i < node->triCount; i++) {
+				// INTERSECTION TESTS
+				// Check a specific triangle.
+				global_intersect_tests++;
+
+				IntersectTri(ray, tri[triIdx[node->leftFirst + i]]);
+			}
 			if (stackPtr == 0) break; else node = stack[--stackPtr];
 			continue;
 		}
@@ -269,28 +282,68 @@ void FasterRaysApp::Tick( float deltaTime )
 	screen->Clear( 0 );
 	// define the corners of the screen in worldspace
 	float3 p0( -2.5f, 0.8f, -0.5f ), p1( -0.5f, 0.8f, -0.5f ), p2( -2.5f, -1.2f, -0.5f );
+	
+	// 1. Setup Camera
+	float3 camPos(-1.5f, -0.2f, -2.5f);
+	
+	// 2. Setup Variables to track the Stats for this Frame
+	long long total_steps = 0;
+	long long total_tests = 0;
+
+	unsigned int min_steps = 999999, max_steps = 0;
+	unsigned int min_tests = 999999, max_tests = 0;
+
 	Ray ray;
 	Timer t;
-	// render tiles of pixels
+	// 3. render tiles of pixels (loop through every pixel)
 	for (int y = 0; y < SCRHEIGHT; y += 4) for (int x = 0; x < SCRWIDTH; x += 4)
 	{
 		// render a single tile
 		for (int v = 0; v < 4; v++) for (int u = 0; u < 4; u++)
 		{
+			// Reset counters for this specific ray
+			global_traversal_steps = 0;
+			global_intersect_tests = 0;
+
 			// calculate the position of a pixel on the screen in worldspace
 			float3 pixelPos = p0 + (p1 - p0) * ((x + u) / (float)SCRWIDTH) + (p2 - p0) * ((y + v) / (float)SCRHEIGHT);
 			// define the ray in worldspace
-			ray.O = float3( -1.5f, -0.2f, -2.5f );
+			ray.O = camPos;
 			ray.D = normalize( pixelPos - ray.O ), ray.t = 1e30f;
 			// calculare reciprocal ray directions to speedup AABB intersections
 			ray.rD = float3( 1 / ray.D.x, 1 / ray.D.y, 1 / ray.D.z );
 			IntersectBVH( ray );
+
+			// GATHER DATA
+			// Update Totals (for Average)
+			total_steps += global_traversal_steps;
+			total_tests += global_intersect_tests;
+
+			// Update Mins and Maxes
+			if (global_traversal_steps < min_steps) min_steps = global_traversal_steps;
+			if (global_traversal_steps > max_steps) max_steps = global_traversal_steps;
+
+			if (global_intersect_tests < min_tests) min_tests = global_intersect_tests;
+			if (global_intersect_tests > max_tests) max_tests = global_intersect_tests;
+
 			uint c = 500 - (int)(ray.t * 42);
 			if (ray.t < 1e30f) screen->Plot( x + u, y + v, c * 0x10101 );
 		}
 	}
 	float elapsed = t.elapsed() * 1000;
 	printf( "tracing time: %.2fms (%5.2fK rays/s)\n", elapsed, sqr( 630 ) / elapsed );
+
+	// 4. Calculate Averages
+	// (Divide by how many pixels we actually traced)
+	int pixelCount = (SCRWIDTH / 4) * (SCRHEIGHT / 4);
+	float avg_steps = (float)total_steps / pixelCount;
+	float avg_tests = (float)total_tests / pixelCount;
+
+	// 5. Print results
+	printf("VIEWPOINT 1 DATA:\n");
+	printf("  Steps -> Avg: %.2f, Min: %d, Max: %d\n", avg_steps, min_steps, max_steps);
+	printf("  Tests -> Avg: %.2f, Min: %d, Max: %d\n", avg_tests, min_tests, max_tests);
+	printf("------------------------------------------------\n");
 }
 
 // EOF
