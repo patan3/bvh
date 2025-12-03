@@ -20,7 +20,8 @@ TheApp* CreateApp() { return new FasterRaysApp(); }
 #define USE_SSE
 
 // triangle count
-#define N	12582 // hardcoded for the unity vehicle mesh
+#define MAX_TRIS 25000       // Maximum space we reserve
+int N = 0;
 
 // forward declarations
 void Subdivide( uint nodeIdx );
@@ -54,8 +55,8 @@ __declspec(align(64)) struct Ray
 };
 
 // application data
-Tri tri[N];
-uint triIdx[N];
+Tri tri[MAX_TRIS];
+uint triIdx[MAX_TRIS];
 BVHNode* bvhNode = 0;
 uint rootNodeIdx = 0, nodesUsed = 2;
 
@@ -259,36 +260,166 @@ void Subdivide( uint nodeIdx )
 	Subdivide( rightChildIdx );
 }
 
+//void FasterRaysApp::Init()
+//{
+//	FILE* file = fopen( "assets/unity.tri", "r" );
+//	float a, b, c, d, e, f, g, h, i;
+//	for (int t = 0; t < N; t++)
+//	{
+//		fscanf( file, "%f %f %f %f %f %f %f %f %f\n",
+//			&a, &b, &c, &d, &e, &f, &g, &h, &i );
+//		tri[t].vertex0 = float3( a, b, c );
+//		tri[t].vertex1 = float3( d, e, f );
+//		tri[t].vertex2 = float3( g, h, i );
+//	}
+//	fclose( file );
+//	// construct the BVH
+//	BuildBVH();
+//}
+
 void FasterRaysApp::Init()
 {
-	FILE* file = fopen( "assets/unity.tri", "r" );
-	float a, b, c, d, e, f, g, h, i;
-	for (int t = 0; t < N; t++)
+	// --- SCENE SELECTION ---
+	int scene_id = 3;
+
+	printf("Loading Scene %d...\n", scene_id);
+
+	// Reset the triangle counter
+	int triIdxCount = 0;
+
+	switch (scene_id)
 	{
-		fscanf( file, "%f %f %f %f %f %f %f %f %f\n",
-			&a, &b, &c, &d, &e, &f, &g, &h, &i );
-		tri[t].vertex0 = float3( a, b, c );
-		tri[t].vertex1 = float3( d, e, f );
-		tri[t].vertex2 = float3( g, h, i );
+	case 1: // SCENE 1: Random cloud of triangles
+	{
+		// Create 10,000 random triangles
+		int count = 3000;
+		for (int i = 0; i < count; i++)
+		{
+			// Random positions in a box from -5 to 5
+			float3 r0(RandomFloat() * 10 - 5, RandomFloat() * 10 - 5, RandomFloat() * 10 - 5);
+			float3 r1(RandomFloat() * 10 - 5, RandomFloat() * 10 - 5, RandomFloat() * 10 - 5);
+			float3 r2(RandomFloat() * 10 - 5, RandomFloat() * 10 - 5, RandomFloat() * 10 - 5);
+
+			tri[triIdxCount].vertex0 = r0;
+			tri[triIdxCount].vertex1 = r1;
+			tri[triIdxCount].vertex2 = r2;
+			triIdxCount++;
+		}
+		break;
 	}
-	fclose( file );
+
+	case 2: // SCENE 2: Dense cloud of triangles 
+	{
+		// 10,000 triangles packed in a TINY box 
+		int count = 3000;
+		for (int i = 0; i < count; i++)
+		{
+			// Box from -1 to 1 (very dense)
+			float3 r0(RandomFloat() * 2 - 1, RandomFloat() * 2 - 1, RandomFloat() * 2 - 1);
+			float3 r1(RandomFloat() * 2 - 1, RandomFloat() * 2 - 1, RandomFloat() * 2 - 1);
+			float3 r2(RandomFloat() * 2 - 1, RandomFloat() * 2 - 1, RandomFloat() * 2 - 1);
+
+			// push slight for camera visibility
+			float3 offset(0, 0, 1.5f);
+			tri[triIdxCount].vertex0 = r0 + offset;
+			tri[triIdxCount].vertex1 = r1 + offset;
+			tri[triIdxCount].vertex2 = r2 + offset;
+			triIdxCount++;
+		}
+		break;
+	}
+
+	case 3: // SCENE 3: The "Floor" (Structured Grid)
+	{
+		// 1. INCREASE SIZE
+		int gridSize = 100;
+		float scale = 0.05f;
+
+		// 2. center the grid
+		float offset = (gridSize * scale) / 2.0f;
+
+		for (int x = 0; x < gridSize; x++)
+		{
+			for (int z = 0; z < gridSize; z++)
+			{
+				// Calculate coordinates centered around 0,0
+				float x0 = x * scale - offset;
+				float x1 = (x + 1) * scale - offset;
+				float z0 = z * scale - offset;
+				float z1 = (z + 1) * scale - offset;
+
+				float3 p0 = float3(x0, 0, z0);
+				float3 p1 = float3(x1, 0, z0);
+				float3 p2 = float3(x1, 0, z1);
+				float3 p3 = float3(x0, 0, z1);
+
+				// Triangle 1
+				tri[triIdxCount].vertex0 = p0;
+				tri[triIdxCount].vertex1 = p1;
+				tri[triIdxCount].vertex2 = p2;
+				triIdxCount++;
+
+				// Triangle 2
+				tri[triIdxCount].vertex0 = p0;
+				tri[triIdxCount].vertex1 = p2;
+				tri[triIdxCount].vertex2 = p3;
+				triIdxCount++;
+			}
+		}
+		break;
+	}
+	}
+
+	// UPDATE THE GLOBAL N
+	N = triIdxCount;
+
 	// construct the BVH
 	BuildBVH();
 }
+
+
 
 void FasterRaysApp::Tick( float deltaTime )
 {
 	// draw the scene
 	screen->Clear( 0 );
 	// define the corners of the screen in worldspace
-	float3 p0( -2.5f, 0.8f, -0.5f ), p1( -0.5f, 0.8f, -0.5f ), p2( -2.5f, -1.2f, -0.5f );
-	
-	// 1. Setup Camera
-	float3 camPos(-1.5f, -0.2f, -2.5f);
+	// float3 p0( -2.5f, 2.5f, -2.5f ), p1( 2.5f, 2.5f, -2.5f ), p2( -2.5f, -2.5f, -2.5f );
+
+	// -----------------------------------------------------------
+	// CAMERA SELECTOR (Uncomment the one matching your Scene)
+	// -----------------------------------------------------------
+
+	// CAM 1: For Scene 1 (The Big Cloud) - far back
+	//float3 camPos(0, 0, -18.0f); // (Front View)
+	// float3 camPos(15.0f, 0, 0); // (Side View)
+
+	// CAM 2: For Scene 2 (The Dense Cluster) - close!
+	// float3 camPos( 0, 0, -3.5f ); // (Close View)
+	// float3 camPos( 0, 0, -8.0f ); // (Far View)
+
+	// CAM 3: For Scene 3 (The Grid/Wall) - Go High and look down
+	float3 camPos( 0.0, 5.0f, -5.5f ); // (Angled View)
+	// float3 camPos( 0, 5.0f, -15.0f ); // (Low View)
+	// -----------------------------------------------------------
+
+	// 1.5 DEFINE SCREEN RELATIVE TO CAMERA (Always looking forward Z+)
+	// Scene 2
+	// Screen is 2 units wide, 2 units tall, 2 units in front of camera
+	// float3 p0 = camPos + float3(-1.0f, 1.0f, 2.0f); // Top-Left
+	// float3 p1 = camPos + float3(1.0f, 1.0f, 2.0f); // Top-Right
+	// float3 p2 = camPos + float3(-1.0f, -1.0f, 2.0f); // Bottom-Left
+
+	// Scene 3
+	float3 p0 = camPos + float3(-1.0f, -1.0f, 2.0f); // Top-Left (Tilted down)
+	float3 p1 = camPos + float3(1.0f, -1.0f, 2.0f); // Top-Right
+	float3 p2 = camPos + float3(-1.0f, -3.0f, 2.0f); // Bottom-Left
+
 	
 	// 2. Setup Variables to track the Stats for this Frame
 	long long total_steps = 0;
 	long long total_tests = 0;
+	long long ray_count = 0;
 
 	unsigned int min_steps = 999999, max_steps = 0;
 	unsigned int min_tests = 999999, max_tests = 0;
@@ -318,6 +449,7 @@ void FasterRaysApp::Tick( float deltaTime )
 			// Update Totals (for Average)
 			total_steps += global_traversal_steps;
 			total_tests += global_intersect_tests;
+			ray_count++;
 
 			// Update Mins and Maxes
 			if (global_traversal_steps < min_steps) min_steps = global_traversal_steps;
@@ -334,10 +466,8 @@ void FasterRaysApp::Tick( float deltaTime )
 	printf( "tracing time: %.2fms (%5.2fK rays/s)\n", elapsed, sqr( 630 ) / elapsed );
 
 	// 4. Calculate Averages
-	// (Divide by how many pixels we actually traced)
-	int pixelCount = (SCRWIDTH / 4) * (SCRHEIGHT / 4);
-	float avg_steps = (float)total_steps / pixelCount;
-	float avg_tests = (float)total_tests / pixelCount;
+	float avg_steps = (float)total_steps / ray_count;
+	float avg_tests = (float)total_tests / ray_count;
 
 	// 5. Print results
 	printf("VIEWPOINT 1 DATA:\n");
